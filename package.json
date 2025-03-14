@@ -31,6 +31,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.0",
     "@noble/ciphers": "^1.2.1",
     "@stablelib/chacha": "^2.0.1",
     "@stablelib/xchacha20": "^2.0.1",

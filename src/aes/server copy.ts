@@ -1,5 +1,4 @@
 // server.ts
-import { GoogleGenerativeAI } from '@google/generative-ai'
 import { Server } from 'socket.io'
 import nacl from 'tweetnacl'
 import util from 'tweetnacl-util'
@@ -18,12 +17,6 @@ console.log('⚠️ Comparta esta clave con el cliente por un canal seguro')
 let doubleKey: Uint8Array | null = null
 let tripleKey: Uint8Array | null = null
 let whiteningKey: Uint8Array | null = null
-
-// Access your API key as an environment variable (see "Set up your API key" above)
-const genAI = new GoogleGenerativeAI('AIzaSyApScEEWXYebBFgMtKpfQuZ6V2ZhpHH0y8')
-
-// The Gemini 1.5 models are versatile and work with most use cases
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
 
 // Función para aplicar técnicas de seguridad
 function applySecurityTechnique(
@@ -133,21 +126,6 @@ io.on('connection', (socket) => {
     let clientMode: 'ecb' | 'cbc' | 'ctr' = 'cbc'
     let clientTechnique: 'none' | 'double' | 'triple' | 'whitening' = 'none'
     let securityKeysSet = false
-    const chat = model.startChat({
-        history: [
-            {
-                role: 'user',
-                parts: [
-                    {
-                        text: 'responde de manera divertida a lo que te diga, limitate a 100 caracteres por respuesta, puedes usar emojis para expresarte'
-                    }
-                ]
-            }
-        ],
-        generationConfig: {
-            maxOutputTokens: 100
-        }
-    })
 
     socket.on('config', (config) => {
         clientMode = config.mode
@@ -155,10 +133,6 @@ io.on('connection', (socket) => {
         console.log(
             `📡 Cliente seleccionó AES-${clientMode} con técnica ${clientTechnique}`
         )
-
-        socket.emit('additionalKeys', {
-            keys: []
-        })
 
         // Generar llaves adicionales según la técnica seleccionada
         if (clientTechnique !== 'none' && !securityKeysSet) {
@@ -168,17 +142,24 @@ io.on('connection', (socket) => {
                 console.log('🔑 Clave para cifrado doble generada')
 
                 // Enviar la clave adicional cifrada con CBC y la clave compartida
-
+                const { encrypted, nonce } = encryptWithCBC(
+                    doubleKey,
+                    sharedKey
+                )
                 socket.emit('additionalKeys', {
-                    keys: [doubleKey]
+                    doubleKey: { encrypted, nonce }
                 })
             } else if (clientTechnique === 'triple') {
                 tripleKey = nacl.randomBytes(32)
                 const secondTripleKey = nacl.randomBytes(32)
                 console.log('🔑 Claves para cifrado triple generadas')
 
+                // Enviar las claves adicionales cifradas
+                const firstKey = encryptWithCBC(tripleKey, sharedKey)
+                const secondKey = encryptWithCBC(secondTripleKey, sharedKey)
                 socket.emit('additionalKeys', {
-                    keys: [tripleKey, secondTripleKey]
+                    tripleKey1: firstKey,
+                    tripleKey2: secondKey
                 })
             } else if (clientTechnique === 'whitening') {
                 whiteningKey = nacl.randomBytes(32)
@@ -198,7 +179,7 @@ io.on('connection', (socket) => {
         }
     })
 
-    socket.on('message', async ({ encryptedMessage, nonce }) => {
+    socket.on('message', ({ encryptedMessage, nonce }) => {
         // Determinar qué clave usar basado en la técnica seleccionada
         let keyToUse: Uint8Array
 
@@ -223,9 +204,6 @@ io.on('connection', (socket) => {
             const decryptedMessage = decryptor.decrypt(encryptedMessage, nonce)
             if (decryptedMessage) {
                 console.log('🔓 Mensaje descifrado:', decryptedMessage)
-                const result = await chat.sendMessage(decryptedMessage)
-                const res = await result.response
-                const randomResponse = res.text()
             } else {
                 console.error(
                     '❌ Error al descifrar: verificación de autenticación fallida'

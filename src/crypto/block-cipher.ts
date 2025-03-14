@@ -1,178 +1,88 @@
-import * as CryptoJS from "crypto-js";
+import nacl from 'tweetnacl'
+import util from 'tweetnacl-util'
 
-// Encrypt using AES (Scenario 2)
-export function encryptAES(
-  text: string,
-  key: string,
-  mode: "ECB" | "CBC" | "CTR",
-  technique: "none" | "double" | "triple" | "whitening",
-  additionalKeys: string[],
-): string {
-  let encrypted = text;
+// Función para descifrar con modo CBC
+export function decryptWithCBC(
+    encryptedBase64: string,
+    nonceBase64: string,
+    key: Uint8Array
+): Uint8Array | null {
+    try {
+        const encrypted = util.decodeBase64(encryptedBase64)
+        const nonce = util.decodeBase64(nonceBase64)
 
-  // Apply the selected security technique
-  switch (technique) {
-    case "none":
-      // Single encryption
-      encrypted = CryptoJS.AES.encrypt(encrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString();
-      break;
+        const decrypted = nacl.secretbox.open(encrypted, nonce, key)
+        if (!decrypted) return null
 
-    case "double":
-      // Double encryption with two keys
-      encrypted = CryptoJS.AES.encrypt(encrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString();
-
-      if (additionalKeys.length > 0) {
-        encrypted = CryptoJS.AES.encrypt(encrypted, additionalKeys[0], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString();
-      }
-      break;
-
-    case "triple":
-      // Triple encryption with three keys
-      encrypted = CryptoJS.AES.encrypt(encrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString();
-
-      if (additionalKeys.length > 0) {
-        encrypted = CryptoJS.AES.encrypt(encrypted, additionalKeys[0], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString();
-      }
-
-      if (additionalKeys.length > 1) {
-        encrypted = CryptoJS.AES.encrypt(encrypted, additionalKeys[1], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString();
-      }
-      break;
-
-    case "whitening":
-      // Key whitening (XOR with additional material before and after)
-      // This is a simplified implementation
-      if (additionalKeys.length > 0) {
-        const whitenedKey = CryptoJS.PBKDF2(key, additionalKeys[0], {
-          keySize: 256 / 32,
-          iterations: 1000,
-        });
-
-        encrypted = CryptoJS.AES.encrypt(encrypted, whitenedKey, {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString();
-      } else {
-        encrypted = CryptoJS.AES.encrypt(encrypted, key, {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString();
-      }
-      break;
-  }
-
-  return encrypted;
+        return decrypted
+    } catch (error) {
+        console.error('Error al descifrar:', error)
+        return null
+    }
 }
 
-// Decrypt using AES (Scenario 2)
-export function decryptAES(
-  ciphertext: string,
-  key: string,
-  mode: "ECB" | "CBC" | "CTR",
-  technique: "none" | "double" | "triple" | "whitening",
-  additionalKeys: string[],
-): string {
-  let decrypted = ciphertext;
+// Función para cifrar mensajes según el modo y técnica seleccionados
+export function createEncryptor(
+    mode: string,
+    baseKey: Uint8Array,
+    technique: 'none' | 'double' | 'triple' | 'whitening',
+    additionalKeys: {
+        doubleKey?: Uint8Array | null
+        tripleKey1?: Uint8Array | null
+        tripleKey2?: Uint8Array | null
+        whiteningKey?: Uint8Array | null
+    } = {}
+) {
+    return {
+        encrypt: (message: string): { encrypted: string; nonce: string } => {
+            const messageUint8 = util.decodeUTF8(message)
+            let nonce: Uint8Array
+            let keyToUse: Uint8Array
 
-  // Apply the reverse of the selected security technique
-  switch (technique) {
-    case "none":
-      // Single decryption
-      decrypted = CryptoJS.AES.decrypt(decrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString(CryptoJS.enc.Utf8);
-      break;
+            // Determinar qué clave usar basado en la técnica
+            if (technique === 'double' && additionalKeys.doubleKey) {
+                keyToUse = additionalKeys.doubleKey
+            } else if (technique === 'triple' && additionalKeys.tripleKey1) {
+                // Para el triple cifrado usaríamos múltiples claves en secuencia
+                // en una implementación real. Aquí simplificamos usando la primera.
+                keyToUse = additionalKeys.tripleKey1
+            } else if (
+                technique === 'whitening' &&
+                additionalKeys.whiteningKey
+            ) {
+                // Aplicar whitening a la clave base
+                keyToUse = new Uint8Array(32)
+                for (let i = 0; i < 32; i++) {
+                    keyToUse[i] = baseKey[i] ^ additionalKeys.whiteningKey[i]
+                }
+            } else {
+                keyToUse = baseKey
+            }
 
-    case "double":
-      // Double decryption with two keys (in reverse order)
-      if (additionalKeys.length > 0) {
-        decrypted = CryptoJS.AES.decrypt(decrypted, additionalKeys[0], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString(CryptoJS.enc.Utf8);
-      }
+            // Generar nonce según el modo
+            if (mode === 'ecb') {
+                nonce = new Uint8Array(24).fill(0)
+            } else {
+                nonce = nacl.randomBytes(24)
+            }
 
-      decrypted = CryptoJS.AES.decrypt(decrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString(CryptoJS.enc.Utf8);
-      break;
-
-    case "triple":
-      // Triple decryption with three keys (in reverse order)
-      if (additionalKeys.length > 1) {
-        decrypted = CryptoJS.AES.decrypt(decrypted, additionalKeys[1], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString(CryptoJS.enc.Utf8);
-      }
-
-      if (additionalKeys.length > 0) {
-        decrypted = CryptoJS.AES.decrypt(decrypted, additionalKeys[0], {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString(CryptoJS.enc.Utf8);
-      }
-
-      decrypted = CryptoJS.AES.decrypt(decrypted, key, {
-        mode: getCryptoJSMode(mode),
-        padding: CryptoJS.pad.Pkcs7,
-      }).toString(CryptoJS.enc.Utf8);
-      break;
-
-    case "whitening":
-      // Key whitening (reverse the process)
-      if (additionalKeys.length > 0) {
-        const whitenedKey = CryptoJS.PBKDF2(key, additionalKeys[0], {
-          keySize: 256 / 32,
-          iterations: 1000,
-        });
-
-        decrypted = CryptoJS.AES.decrypt(decrypted, whitenedKey, {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString(CryptoJS.enc.Utf8);
-      } else {
-        decrypted = CryptoJS.AES.decrypt(decrypted, key, {
-          mode: getCryptoJSMode(mode),
-          padding: CryptoJS.pad.Pkcs7,
-        }).toString(CryptoJS.enc.Utf8);
-      }
-      break;
-  }
-
-  return decrypted;
+            const encrypted = nacl.secretbox(messageUint8, nonce, keyToUse)
+            return {
+                encrypted: util.encodeBase64(encrypted),
+                nonce: util.encodeBase64(nonce)
+            }
+        }
+    }
 }
 
-// Helper to get CryptoJS mode from string
-export function getCryptoJSMode(mode: "ECB" | "CBC" | "CTR") {
-  switch (mode) {
-    case "ECB":
-      return CryptoJS.mode.ECB;
-    case "CBC":
-      return CryptoJS.mode.CBC;
-    case "CTR":
-      return CryptoJS.mode.CTR;
-    default:
-      return CryptoJS.mode.CBC;
-  }
+export function encryptWithCBC(
+    message: Uint8Array,
+    key: Uint8Array
+): { encrypted: string; nonce: string } {
+    const nonce = nacl.randomBytes(24)
+    const encrypted = nacl.secretbox(message, nonce, key)
+    return {
+        encrypted: util.encodeBase64(encrypted),
+        nonce: util.encodeBase64(nonce)
+    }
 }
